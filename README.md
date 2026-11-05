@@ -361,3 +361,291 @@ SET SESSION cte_max_recursion_depth = 100001;
 -- Timing template: execute each query repeatedly (e.g. 5 times), record elapsed
 -- milliseconds from Workbench/your SQL client, then report median.
 -- Do not invent timing values; client/server hardware affects the result.
+
+
+
+
+ASSIGNMENT 2 
+
+
+
+-- =====================================================================
+-- SwiftSpan Parcels - Courier Handover Completion   (CSA05 Assignment CO2)
+-- Student: D. Midhun Sri   Reg. No: 1924260014   Slot A
+-- MySQL 8.0.31+ (CHECK enforced from 8.0.16; WITH/CTE; EXCEPT needs 8.0.31).  InnoDB.
+-- STATUS: written for MySQL 8; the same logic was executed and verified in the
+--         SQLite harness (swiftspan_experiment.py).  This MySQL script itself
+--         was NOT executed in the authoring environment (no MySQL server there).
+-- RUN ORDER: 0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 (set @actors in section 2)
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 0. DATABASES
+-- ---------------------------------------------------------------------
+DROP DATABASE IF EXISTS swiftspan_a;  DROP DATABASE IF EXISTS swiftspan_b;  DROP DATABASE IF EXISTS swiftspan_c;
+CREATE DATABASE swiftspan_a;   -- Design A : flat baseline
+CREATE DATABASE swiftspan_b;   -- Design B : partial normalisation
+CREATE DATABASE swiftspan_c;   -- Design C : BCNF (recommended)
+
+-- ---------------------------------------------------------------------
+-- 1. DDL
+-- ---------------------------------------------------------------------
+-- ===== DESIGN A : FLAT (14 attributes, logical key (SenderID,ServiceID,DispatchWave)) =====
+CREATE TABLE swiftspan_a.flat (
+  SenderID        INT UNSIGNED  NOT NULL,
+  SenderName      VARCHAR(20)   NOT NULL,
+  RouteGroup      TINYINT UNSIGNED NOT NULL,
+  ServiceID       TINYINT UNSIGNED NOT NULL,
+  ServiceCode     CHAR(6)       NOT NULL,
+  ServiceName     VARCHAR(30)   NOT NULL,
+  VolumeWeight    DECIMAL(4,2)  NOT NULL,
+  CoordinatorID   INT UNSIGNED  NOT NULL,
+  CoordinatorName VARCHAR(20)   NOT NULL,
+  Hub             VARCHAR(10)   NOT NULL,
+  DispatchWave    TINYINT UNSIGNED NOT NULL,
+  Completion      TINYINT UNSIGNED NOT NULL,
+  ServiceBand     VARCHAR(4)    NOT NULL,
+  RouteFactor     DECIMAL(3,2)  NOT NULL,
+  PRIMARY KEY (SenderID, ServiceID, DispatchWave),
+  CONSTRAINT uq_flat_code UNIQUE (SenderID, ServiceCode, DispatchWave),   -- alternate key
+  CONSTRAINT ck_flat_completion CHECK (Completion BETWEEN 0 AND 100),
+  KEY ix_flat_service (ServiceID),
+  KEY ix_flat_coord   (CoordinatorID),
+  KEY ix_flat_wave    (DispatchWave, SenderID)
+) ENGINE=InnoDB;
+
+-- ===== DESIGN B : PARTIAL (identity/catalog removed; operator + policy facts still repeated) =====
+CREATE TABLE swiftspan_b.sender (
+  SenderID INT UNSIGNED NOT NULL PRIMARY KEY, SenderName VARCHAR(20) NOT NULL, RouteGroup TINYINT UNSIGNED NOT NULL
+) ENGINE=InnoDB;
+CREATE TABLE swiftspan_b.service (
+  ServiceID TINYINT UNSIGNED NOT NULL PRIMARY KEY, ServiceCode CHAR(6) NOT NULL, ServiceName VARCHAR(30) NOT NULL,
+  VolumeWeight DECIMAL(4,2) NOT NULL, CONSTRAINT uq_service_code UNIQUE (ServiceCode)
+) ENGINE=InnoDB;
+CREATE TABLE swiftspan_b.assignment (            -- CoordinatorName, Hub repeated: K -> Kn,H is transitive here
+  SenderID INT UNSIGNED NOT NULL, ServiceID TINYINT UNSIGNED NOT NULL, CoordinatorID INT UNSIGNED NOT NULL,
+  CoordinatorName VARCHAR(20) NOT NULL, Hub VARCHAR(10) NOT NULL,
+  PRIMARY KEY (SenderID, ServiceID), KEY ix_asg_coord (CoordinatorID),
+  CONSTRAINT fk_b_asg_sender  FOREIGN KEY (SenderID)  REFERENCES swiftspan_b.sender(SenderID)   ON DELETE RESTRICT,
+  CONSTRAINT fk_b_asg_service FOREIGN KEY (ServiceID) REFERENCES swiftspan_b.service(ServiceID) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+CREATE TABLE swiftspan_b.observation (           -- ServiceBand, RouteFactor repeated: P -> B -> F is transitive here
+  SenderID INT UNSIGNED NOT NULL, ServiceID TINYINT UNSIGNED NOT NULL, DispatchWave TINYINT UNSIGNED NOT NULL,
+  Completion TINYINT UNSIGNED NOT NULL, ServiceBand VARCHAR(4) NOT NULL, RouteFactor DECIMAL(3,2) NOT NULL,
+  PRIMARY KEY (SenderID, ServiceID, DispatchWave), KEY ix_obs_wave (DispatchWave, SenderID),
+  CONSTRAINT ck_obs_completion CHECK (Completion BETWEEN 0 AND 100),
+  CONSTRAINT fk_b_obs_asg FOREIGN KEY (SenderID, ServiceID) REFERENCES swiftspan_b.assignment(SenderID, ServiceID) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+-- ===== DESIGN C : BCNF (7 relations) =====
+CREATE TABLE swiftspan_c.sender (
+  SenderID INT UNSIGNED NOT NULL PRIMARY KEY, SenderName VARCHAR(20) NOT NULL, RouteGroup TINYINT UNSIGNED NOT NULL
+) ENGINE=InnoDB;
+CREATE TABLE swiftspan_c.service (                -- candidate keys: ServiceID (PK) and ServiceCode (alternate)
+  ServiceID TINYINT UNSIGNED NOT NULL PRIMARY KEY, ServiceCode CHAR(6) NOT NULL, ServiceName VARCHAR(30) NOT NULL,
+  VolumeWeight DECIMAL(4,2) NOT NULL, CONSTRAINT uq_service_code UNIQUE (ServiceCode)
+) ENGINE=InnoDB;
+CREATE TABLE swiftspan_c.coordinator (
+  CoordinatorID INT UNSIGNED NOT NULL PRIMARY KEY, CoordinatorName VARCHAR(20) NOT NULL, Hub VARCHAR(10) NOT NULL
+) ENGINE=InnoDB;
+CREATE TABLE swiftspan_c.band_policy (
+  ServiceBand VARCHAR(4) NOT NULL PRIMARY KEY, RouteFactor DECIMAL(3,2) NOT NULL
+) ENGINE=InnoDB;
+CREATE TABLE swiftspan_c.completion_policy (      -- fixed fictional policy: Completion -> ServiceBand
+  Completion TINYINT UNSIGNED NOT NULL PRIMARY KEY, ServiceBand VARCHAR(4) NOT NULL,
+  CONSTRAINT ck_cp_completion CHECK (Completion BETWEEN 0 AND 100),
+  CONSTRAINT fk_cp_band FOREIGN KEY (ServiceBand) REFERENCES swiftspan_c.band_policy(ServiceBand) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+CREATE TABLE swiftspan_c.assignment (             -- scope {SenderID,ServiceID} -> CoordinatorID
+  SenderID INT UNSIGNED NOT NULL, ServiceID TINYINT UNSIGNED NOT NULL, CoordinatorID INT UNSIGNED NOT NULL,
+  PRIMARY KEY (SenderID, ServiceID), KEY ix_asg_coord (CoordinatorID),
+  CONSTRAINT fk_asg_sender  FOREIGN KEY (SenderID)      REFERENCES swiftspan_c.sender(SenderID)           ON DELETE RESTRICT,
+  CONSTRAINT fk_asg_service FOREIGN KEY (ServiceID)     REFERENCES swiftspan_c.service(ServiceID)         ON DELETE RESTRICT,
+  CONSTRAINT fk_asg_coord   FOREIGN KEY (CoordinatorID) REFERENCES swiftspan_c.coordinator(CoordinatorID) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+CREATE TABLE swiftspan_c.observation (            -- key (SenderID,ServiceID,DispatchWave) -> Completion
+  SenderID INT UNSIGNED NOT NULL, ServiceID TINYINT UNSIGNED NOT NULL, DispatchWave TINYINT UNSIGNED NOT NULL,
+  Completion TINYINT UNSIGNED NOT NULL,
+  PRIMARY KEY (SenderID, ServiceID, DispatchWave),
+  KEY ix_obs_wave (DispatchWave, SenderID), KEY ix_obs_comp (Completion),
+  CONSTRAINT ck_obs_completion CHECK (Completion BETWEEN 0 AND 100),
+  CONSTRAINT fk_obs_asg  FOREIGN KEY (SenderID, ServiceID) REFERENCES swiftspan_c.assignment(SenderID, ServiceID) ON DELETE RESTRICT,
+  CONSTRAINT fk_obs_comp FOREIGN KEY (Completion) REFERENCES swiftspan_c.completion_policy(Completion) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------
+-- 2. SEEDED, DETERMINISTIC DATA GENERATION  (identical logical state in A, B, C)
+--    Choose ONE population: 500 actors = 10,000 obs | 5000 = 100,000 | 30000 = 600,000
+--    Same arithmetic as the Python harness (verified):  expected SUM(Completion) =
+--       500 actors -> 591041     5000 actors -> 5907094     30000 actors -> 35442636
+-- ---------------------------------------------------------------------
+SET @actors := 500;                              -- <<< change to 5000 or 30000
+SET SESSION cte_max_recursion_depth = 100000;
+DROP TABLE IF EXISTS swiftspan_a.nums;
+CREATE TABLE swiftspan_a.nums (i BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB;
+INSERT INTO swiftspan_a.nums
+WITH RECURSIVE n(i) AS (SELECT CAST(1 AS SIGNED) UNION ALL SELECT i+1 FROM n WHERE i < 30000)
+SELECT i FROM n;
+
+-- reference rows (catalogue + fixed policy)
+INSERT INTO swiftspan_c.service VALUES (1,'SVC-01','Standard Parcel',1.00),(2,'SVC-02','Express Parcel',1.25),
+  (3,'SVC-03','Cold Chain',2.00),(4,'SVC-04','Fragile Handling',1.50),(5,'SVC-05','Bulk Freight',2.50);
+INSERT INTO swiftspan_c.band_policy VALUES ('LOW',1.50),('MID',1.00),('HIGH',0.80);
+INSERT INTO swiftspan_c.completion_policy
+SELECT i-1, CASE WHEN i-1 < 39 THEN 'LOW' WHEN i-1 < 70 THEN 'MID' ELSE 'HIGH' END FROM swiftspan_a.nums WHERE i <= 101;
+
+-- 2a. build the flat baseline (the single source of generated facts)
+INSERT INTO swiftspan_a.flat
+SELECT t.sid, CONCAT('Sender-',LPAD(t.sid,5,'0')), MOD(t.sid-1,5)+1,
+       sv.ServiceID, sv.ServiceCode, sv.ServiceName, sv.VolumeWeight,
+       t.cid, CONCAT('Coord-',LPAD(t.cid,5,'0')), CONCAT('Hub-',MOD(t.cid-1,8)+1),
+       t.wid, t.comp,
+       CASE WHEN t.comp < 39 THEN 'LOW' WHEN t.comp < 70 THEN 'MID' ELSE 'HIGH' END,
+       CASE WHEN t.comp < 39 THEN 1.50 WHEN t.comp < 70 THEN 1.00 ELSE 0.80 END
+FROM (
+  SELECT x.sid, x.vid, x.wid, x.cid, LEAST(100, MOD(x.u,61) + MOD(x.u DIV 61,61)) AS comp
+  FROM (
+    SELECT y.sid, y.vid, y.wid, y.cid, (MOD(y.h1*1103515245 + 12345, 2147483648) DIV 65536) AS u
+    FROM (
+      SELECT s.i AS sid, v.i AS vid, w.i AS wid,
+             MOD((s.i-1)*5 + (v.i-1), GREATEST(1, @actors DIV 5)) + 1 AS cid,
+             MOD(s.i*1103515245 + v.i*134775813 + w.i*69069 + 12345, 2147483648) AS h1
+      FROM swiftspan_a.nums s JOIN swiftspan_a.nums v ON v.i <= 5 JOIN swiftspan_a.nums w ON w.i <= 4
+      WHERE s.i <= @actors
+    ) y
+  ) x
+) t
+JOIN swiftspan_c.service sv ON sv.ServiceID = t.vid;
+
+-- 2b. load Design B from the flat baseline
+INSERT INTO swiftspan_b.sender  SELECT DISTINCT SenderID, SenderName, RouteGroup FROM swiftspan_a.flat;
+INSERT INTO swiftspan_b.service SELECT DISTINCT ServiceID, ServiceCode, ServiceName, VolumeWeight FROM swiftspan_a.flat;
+INSERT INTO swiftspan_b.assignment SELECT DISTINCT SenderID, ServiceID, CoordinatorID, CoordinatorName, Hub FROM swiftspan_a.flat;
+INSERT INTO swiftspan_b.observation SELECT SenderID, ServiceID, DispatchWave, Completion, ServiceBand, RouteFactor FROM swiftspan_a.flat;
+
+-- 2c. load Design C from the flat baseline
+INSERT INTO swiftspan_c.sender      SELECT DISTINCT SenderID, SenderName, RouteGroup FROM swiftspan_a.flat;
+INSERT INTO swiftspan_c.coordinator SELECT DISTINCT CoordinatorID, CoordinatorName, Hub FROM swiftspan_a.flat;
+INSERT INTO swiftspan_c.assignment  SELECT DISTINCT SenderID, ServiceID, CoordinatorID FROM swiftspan_a.flat;
+INSERT INTO swiftspan_c.observation SELECT SenderID, ServiceID, DispatchWave, Completion FROM swiftspan_a.flat;
+
+-- 2d. verification: counts, checksum, and lossless round-trip (both EXCEPT results must be 0 rows)
+SELECT COUNT(*) AS flat_rows, SUM(Completion) AS checksum FROM swiftspan_a.flat;
+SELECT (SELECT COUNT(*) FROM swiftspan_b.observation) AS b_obs, (SELECT COUNT(*) FROM swiftspan_c.observation) AS c_obs;
+
+
+-- ---------------------------------------------------------------------
+-- 3. VIEWS (Design C).  Views expose columns; they do NOT by themselves restrict which
+--    SenderID a caller may read (MySQL has no row-level security).
+-- ---------------------------------------------------------------------
+USE swiftspan_c;
+CREATE VIEW v_actor_observation AS            -- universal relation reconstructed losslessly from the 7 tables
+SELECT o.SenderID, s.SenderName, s.RouteGroup, o.ServiceID, sv.ServiceCode, sv.ServiceName, sv.VolumeWeight,
+       a.CoordinatorID, co.CoordinatorName, co.Hub, o.DispatchWave, o.Completion, cp.ServiceBand, bp.RouteFactor
+FROM observation o
+JOIN assignment a ON a.SenderID=o.SenderID AND a.ServiceID=o.ServiceID
+JOIN sender s ON s.SenderID=o.SenderID JOIN service sv ON sv.ServiceID=o.ServiceID
+JOIN coordinator co ON co.CoordinatorID=a.CoordinatorID
+JOIN completion_policy cp ON cp.Completion=o.Completion JOIN band_policy bp ON bp.ServiceBand=cp.ServiceBand;
+CREATE VIEW v_actor_latest_status AS
+SELECT o.SenderID, sv.ServiceCode, sv.ServiceName, o.DispatchWave AS LatestWave, o.Completion, cp.ServiceBand, bp.RouteFactor,
+       ROUND(o.Completion*sv.VolumeWeight*bp.RouteFactor,2) AS AdjIndex
+FROM observation o
+JOIN service sv ON sv.ServiceID=o.ServiceID
+JOIN completion_policy cp ON cp.Completion=o.Completion
+JOIN band_policy bp ON bp.ServiceBand=cp.ServiceBand
+WHERE o.DispatchWave=(SELECT MAX(x.DispatchWave) FROM observation x WHERE x.SenderID=o.SenderID AND x.ServiceID=o.ServiceID);
+CREATE VIEW v_coordinator_obs AS
+SELECT a.CoordinatorID, co.Hub, o.Completion
+FROM observation o JOIN assignment a ON a.SenderID=o.SenderID AND a.ServiceID=o.ServiceID
+JOIN coordinator co ON co.CoordinatorID=a.CoordinatorID;
+CREATE VIEW v_coordinator_below_hub_mean AS
+SELECT cm.CoordinatorID, cm.Hub, ROUND(cm.m,4) AS CoordinatorMean, ROUND(hm.m,4) AS HubMean
+FROM (SELECT CoordinatorID,Hub,AVG(Completion*1.0) AS m FROM v_coordinator_obs GROUP BY CoordinatorID,Hub) cm
+JOIN (SELECT Hub,SUM(Completion)*1.0/COUNT(*) AS m FROM v_coordinator_obs GROUP BY Hub) hm ON hm.Hub=cm.Hub
+WHERE cm.m < hm.m;
+CREATE VIEW v_sender_subthreshold_waves AS
+SELECT SenderID, COUNT(DISTINCT DispatchWave) AS SubThresholdWaves FROM observation WHERE Completion<39 GROUP BY SenderID;
+
+-- lossless check (must return 0 rows for the first query and 0 rows for the second)
+SELECT SenderID,SenderName,RouteGroup,ServiceID,ServiceCode,ServiceName,VolumeWeight,CoordinatorID,CoordinatorName,Hub,DispatchWave,Completion,ServiceBand,RouteFactor
+FROM swiftspan_c.v_actor_observation
+EXCEPT SELECT SenderID,SenderName,RouteGroup,ServiceID,ServiceCode,ServiceName,VolumeWeight,CoordinatorID,CoordinatorName,Hub,DispatchWave,Completion,ServiceBand,RouteFactor FROM swiftspan_a.flat;
+SELECT SenderID,SenderName,RouteGroup,ServiceID,ServiceCode,ServiceName,VolumeWeight,CoordinatorID,CoordinatorName,Hub,DispatchWave,Completion,ServiceBand,RouteFactor
+FROM swiftspan_a.flat
+EXCEPT SELECT SenderID,SenderName,RouteGroup,ServiceID,ServiceCode,ServiceName,VolumeWeight,CoordinatorID,CoordinatorName,Hub,DispatchWave,Completion,ServiceBand,RouteFactor FROM swiftspan_c.v_actor_observation;
+
+
+-- ---------------------------------------------------------------------
+-- 4. THE FIVE CASE QUERIES  (A = flat, B = partial, C = BCNF).  Results must be identical.
+--    Interpretation notes: "actor 1" = SenderID 1.  Weighted adjusted index = Completion x VolumeWeight x RouteFactor.
+--    Q2 = every assigned service of the sender has >=1 observation and none below 39 (anti-join, no vacuous truth).
+--    Q3 = sender has >=1 wave-4 observation and none of its wave-4 observations is below 39.
+-- ---------------------------------------------------------------------
+-- Q1  actor 1, DispatchWave=4, weighted adjusted index  [design A]
+USE swiftspan_a;
+SELECT SenderID,ServiceID,DispatchWave,Completion,ROUND(Completion*VolumeWeight*RouteFactor,2) FROM flat WHERE SenderID=1 AND DispatchWave=4 ORDER BY ServiceID;
+
+-- Q1  actor 1, DispatchWave=4, weighted adjusted index  [design B]
+USE swiftspan_b;
+SELECT o.SenderID,o.ServiceID,o.DispatchWave,o.Completion,ROUND(o.Completion*sv.VolumeWeight*o.RouteFactor,2) FROM observation o JOIN service sv ON sv.ServiceID=o.ServiceID WHERE o.SenderID=1 AND o.DispatchWave=4 ORDER BY o.ServiceID;
+
+-- Q1  actor 1, DispatchWave=4, weighted adjusted index  [design C]
+USE swiftspan_c;
+SELECT o.SenderID,o.ServiceID,o.DispatchWave,o.Completion,ROUND(o.Completion*sv.VolumeWeight*bp.RouteFactor,2) FROM observation o JOIN service sv ON sv.ServiceID=o.ServiceID JOIN completion_policy cp ON cp.Completion=o.Completion JOIN band_policy bp ON bp.ServiceBand=cp.ServiceBand WHERE o.SenderID=1 AND o.DispatchWave=4 ORDER BY o.ServiceID;
+
+-- Q2  senders meeting threshold 39 for every required service  [design A]
+USE swiftspan_a;
+SELECT f.SenderID FROM flat f GROUP BY f.SenderID HAVING MIN(f.Completion)>=39 AND COUNT(DISTINCT f.ServiceID)=5 ORDER BY 1;
+
+-- Q2  senders meeting threshold 39 for every required service  [design B]
+USE swiftspan_b;
+SELECT s.SenderID FROM sender s WHERE NOT EXISTS (SELECT 1 FROM assignment a WHERE a.SenderID=s.SenderID AND (NOT EXISTS (SELECT 1 FROM observation o WHERE o.SenderID=a.SenderID AND o.ServiceID=a.ServiceID) OR EXISTS (SELECT 1 FROM observation x WHERE x.SenderID=a.SenderID AND x.ServiceID=a.ServiceID AND x.Completion<39))) ORDER BY 1;
+
+-- Q2  senders meeting threshold 39 for every required service  [design C]
+USE swiftspan_c;
+SELECT s.SenderID FROM sender s WHERE NOT EXISTS (SELECT 1 FROM assignment a WHERE a.SenderID=s.SenderID AND (NOT EXISTS (SELECT 1 FROM observation o WHERE o.SenderID=a.SenderID AND o.ServiceID=a.ServiceID) OR EXISTS (SELECT 1 FROM observation x WHERE x.SenderID=a.SenderID AND x.ServiceID=a.ServiceID AND x.Completion<39))) ORDER BY 1;
+
+-- Q3  observed in period 4 and no value below 39  [design A]
+USE swiftspan_a;
+SELECT DISTINCT o.SenderID FROM flat o WHERE o.DispatchWave=4 AND NOT EXISTS (SELECT 1 FROM flat x WHERE x.SenderID=o.SenderID AND x.DispatchWave=4 AND x.Completion<39) ORDER BY 1;
+
+-- Q3  observed in period 4 and no value below 39  [design B]
+USE swiftspan_b;
+SELECT DISTINCT o.SenderID FROM observation o WHERE o.DispatchWave=4 AND NOT EXISTS (SELECT 1 FROM observation x WHERE x.SenderID=o.SenderID AND x.DispatchWave=4 AND x.Completion<39) ORDER BY 1;
+
+-- Q3  observed in period 4 and no value below 39  [design C]
+USE swiftspan_c;
+SELECT DISTINCT o.SenderID FROM observation o WHERE o.DispatchWave=4 AND NOT EXISTS (SELECT 1 FROM observation x WHERE x.SenderID=o.SenderID AND x.DispatchWave=4 AND x.Completion<39) ORDER BY 1;
+
+-- Q4  coordinator means below the observation-weighted hub mean  [design A]
+USE swiftspan_a;
+WITH cm AS (SELECT CoordinatorID,Hub,AVG(Completion*1.0) m FROM flat GROUP BY CoordinatorID,Hub), hm AS (SELECT Hub,SUM(Completion)*1.0/COUNT(*) m FROM flat GROUP BY Hub) SELECT cm.CoordinatorID,ROUND(cm.m,4) FROM cm JOIN hm ON hm.Hub=cm.Hub WHERE cm.m<hm.m ORDER BY 1;
+
+-- Q4  coordinator means below the observation-weighted hub mean  [design B]
+USE swiftspan_b;
+WITH j AS (SELECT a.CoordinatorID,a.Hub,o.Completion FROM observation o JOIN assignment a ON a.SenderID=o.SenderID AND a.ServiceID=o.ServiceID), cm AS (SELECT CoordinatorID,Hub,AVG(Completion*1.0) m FROM j GROUP BY CoordinatorID,Hub), hm AS (SELECT Hub,SUM(Completion)*1.0/COUNT(*) m FROM j GROUP BY Hub) SELECT cm.CoordinatorID,ROUND(cm.m,4) FROM cm JOIN hm ON hm.Hub=cm.Hub WHERE cm.m<hm.m ORDER BY 1;
+
+-- Q4  coordinator means below the observation-weighted hub mean  [design C]
+USE swiftspan_c;
+WITH j AS (SELECT a.CoordinatorID,co.Hub,o.Completion FROM observation o JOIN assignment a ON a.SenderID=o.SenderID AND a.ServiceID=o.ServiceID JOIN coordinator co ON co.CoordinatorID=a.CoordinatorID), cm AS (SELECT CoordinatorID,Hub,AVG(Completion*1.0) m FROM j GROUP BY CoordinatorID,Hub), hm AS (SELECT Hub,SUM(Completion)*1.0/COUNT(*) m FROM j GROUP BY Hub) SELECT cm.CoordinatorID,ROUND(cm.m,4) FROM cm JOIN hm ON hm.Hub=cm.Hub WHERE cm.m<hm.m ORDER BY 1;
+
+-- Q5  sub-threshold observations in at least 3 distinct waves  [design A]
+USE swiftspan_a;
+SELECT SenderID FROM (SELECT SenderID,COUNT(DISTINCT DispatchWave) n FROM flat WHERE Completion<39 GROUP BY SenderID) AS t WHERE n>=3 ORDER BY 1;
+
+-- Q5  sub-threshold observations in at least 3 distinct waves  [design B]
+USE swiftspan_b;
+SELECT SenderID FROM (SELECT SenderID,COUNT(DISTINCT DispatchWave) n FROM observation WHERE Completion<39 GROUP BY SenderID) AS t WHERE n>=3 ORDER BY 1;
+
+-- Q5  sub-threshold observations in at least 3 distinct waves  [design C]
+USE swiftspan_c;
+SELECT SenderID FROM (SELECT SenderID,COUNT(DISTINCT DispatchWave) n FROM observation WHERE Completion<39 GROUP BY SenderID) AS t WHERE n>=3 ORDER BY 1;
+
+
+-- ---------------------------------------------------------------------
+-- 5. ANOMALY TRIALS  (each inside a transaction that is rolled back; ROW_COUNT() = rows touched)
+-- ---------------------------------------------------------------------
+-- 5.1 catalogue-name change for ServiceID=1  (expected: N/5 rows in A, 1 in B, 1 in C)
+START TRANSACTION; UPDATE swiftspan_a.flat SET ServiceName='Standard Parcel PLUS' WHERE ServiceID=1; SELECT ROW_COUNT() AS rows_A; ROLLBACK;
+START TRANSACTION; UPDATE swiftspan_b.service SET ServiceName='Standard Parcel PLUS' WHERE
