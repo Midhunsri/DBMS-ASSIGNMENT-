@@ -1,4 +1,4 @@
-# DBMS-ASSIGNMENT-
+# DBMS-ASSIGNMENT
 queries 
 CSA05 DBMS CO1 Assignment | Meridian Museum
 -- Student: D. Midhun Sri | Register No: 1924260014 | Slot A
