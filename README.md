@@ -1,0 +1,2 @@
+# DBMS-ASSIGNMENT-
+queries 
